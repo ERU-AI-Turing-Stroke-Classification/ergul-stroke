@@ -1,0 +1,99 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import numpy as np
+import random
+from torchvision import models
+from torch.utils.data import DataLoader, random_split
+from load_dataset import LoadDataset
+
+# Hiperparametre Aralıkları
+def get_random_hyperparams():
+    return {
+        "learning_rate": 10**random.uniform(-4, -2),
+        "batch_size": random.choice([16, 32, 64]),
+        "momentum": random.uniform(0.5, 0.99)
+    }
+
+# Modeli Oluştur
+class ResNet50Classifier(nn.Module):
+    def __init__(self, num_classes=2):
+        super(ResNet50Classifier, self).__init__()
+        self.model = models.resnet50(pretrained=True)
+        self.model.fc = nn.Linear(self.model.fc.in_features, num_classes)
+    
+    def forward(self, x):
+        return self.model(x)
+
+# Fitness Fonksiyonu
+def evaluate_fitness(hyperparams, train_loader, test_loader):
+    model = ResNet50Classifier().cuda()
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(model.parameters(), lr=hyperparams["learning_rate"], momentum=hyperparams["momentum"])
+    
+    model.train()
+    for epoch in range(3):  # Hızlı test için sadece 3 epoch kullanıyoruz
+        for images, labels in train_loader:
+            images, labels = images.cuda(), labels.cuda()
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+    
+    # Modeli test et
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for images, labels in test_loader:
+            images, labels = images.cuda(), labels.cuda()
+            outputs = model(images)
+            _, predicted = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+    
+    accuracy = correct / total
+    return accuracy
+
+# Genetik Algoritma
+class GeneticOptimizer:
+    def __init__(self, population_size=10, generations=5, mutation_rate=0.1):
+        self.population_size = population_size
+        self.generations = generations
+        self.mutation_rate = mutation_rate
+        
+    def optimize(self, train_loader, test_loader):
+        population = [get_random_hyperparams() for _ in range(self.population_size)]
+        
+        for generation in range(self.generations):
+            fitness_scores = [evaluate_fitness(hp, train_loader, test_loader) for hp in population]
+            sorted_population = [x for _, x in sorted(zip(fitness_scores, population), reverse=True)]
+            
+            # Yeni jenerasyonu oluştur
+            next_population = sorted_population[:self.population_size // 2]
+            while len(next_population) < self.population_size:
+                p1, p2 = random.sample(next_population, 2)
+                child = {k: random.choice([p1[k], p2[k]]) for k in p1}
+                if random.random() < self.mutation_rate:
+                    child = get_random_hyperparams()
+                next_population.append(child)
+            population = next_population
+            
+            print(f"Generation {generation+1}: Best Accuracy = {max(fitness_scores):.4f}")
+        
+        best_hyperparams = sorted_population[0]
+        print("Best Hyperparameters:", best_hyperparams)
+        return best_hyperparams
+
+# Veri Yükleme
+dataset = LoadDataset("/path/to/dataset", image_size=224, image_depth=3)
+train_size = int(0.8 * len(dataset))
+test_size = len(dataset) - train_size
+train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+
+# Genetik Algoritmayı çalıştır
+optimizer = GeneticOptimizer()
+best_params = optimizer.optimize(train_loader, test_loader)
